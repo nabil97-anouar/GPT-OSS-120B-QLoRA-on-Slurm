@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local caches and secrets
+.cache/
+.env
+.env.*
+!.env.example
+
+# Generated training artifacts
+runs/
+outputs/
+checkpoints/
+*.safetensors
+*.bin
+*.pt
+
+# Logs may contain usernames, internal hosts, paths, and private IPs.
+*.out
+*.err
+*.log
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/

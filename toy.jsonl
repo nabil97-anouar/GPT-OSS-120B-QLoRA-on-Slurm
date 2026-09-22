@@ -1,0 +1,2 @@
+{"messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"Add 7 + 8."},{"role":"assistant","content":"15"}]}
+{"system":"You are a helpful assistant.","user":"What is 12 + 23?","assistant":"35"}

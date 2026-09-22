@@ -1,0 +1,8 @@
+# Install a CUDA-compatible PyTorch build separately for the target cluster.
+accelerate
+bitsandbytes
+datasets
+peft
+transformers
+trl
+unsloth
