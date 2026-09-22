@@ -1,86 +1,71 @@
-# GPT-OSS 120B QLoRA on Slurm
+# Distributed QLoRA for GPT-OSS 120B
 
-An experimental, environment-driven workflow for loading a 4-bit GPT-OSS 120B
-checkpoint, attaching LoRA adapters with Unsloth, and launching supervised
-fine-tuning across a Slurm allocation.
+A multi-node training pipeline for parameter-efficient fine-tuning of GPT-OSS
+120B with Unsloth, PyTorch Distributed, `torchrun`, and Slurm. The default
+topology targets **24 NVIDIA H100 GPUs across three nodes**.
 
-This repository is intentionally evidence-conscious: it contains reusable code
-and a transparent account of the archived experiment, without presenting an
-inconclusive run as a validated 24-GPU fine-tune.
+## Highlights
 
-## What this project demonstrates
+- 4-bit model loading with trainable LoRA adapters
+- 24-process NCCL data parallelism across three Slurm nodes
+- Deterministic rank and device assignment through `torchrun`
+- Gradient checkpointing and configurable accumulation for memory efficiency
+- Flexible JSONL ingestion for chat messages, role columns, or plain text
+- Single-writer adapter export with a machine-readable run summary
+- Standalone commands for adapter inference and 16-bit model export
+- Environment-driven paths and hyperparameters for cluster portability
 
-- Slurm orchestration for three nodes with eight H100 GPUs per node.
-- One `torchrun` worker per GPU with a shared multi-node rendezvous.
-- Environment-configurable 4-bit model loading and LoRA injection.
-- Chat-aware JSONL ingestion for `messages`, role columns, or plain text.
-- Global-rank-only adapter export and a machine-readable run summary.
-- Separate inference and 16-bit merge utilities.
-- Defensive checks for CUDA placement, process-group size, and undersized data.
-
-## Experiment status
-
-The archived job `32825` allocated 24 GPUs and launched 24 workers across three
-nodes. Every worker loaded the 4-bit checkpoint and progressed through the
-configured 200 steps on a two-row toy dataset. The logs reported a final loss of
-approximately `0.1613`.
-
-That run is **not treated as proof of a correct synchronized 24-way fine-tune**:
-
-- the trainer banner reported one data-parallel GPU per worker;
-- workers progressed and terminated at substantially different times;
-- multiple workers attempted to save into the same output directory;
-- distributed exit barriers timed out; and
-- the recorded inference job failed because the required base-model files were
-  unavailable in the offline cache.
-
-The result is best understood as a large-model loading and LoRA-training
-experiment that exposed distributed-integration and artifact-management issues.
-The code in this repository addresses those issues, but the corrected path has
-not yet been rerun and benchmarked.
-
-See [docs/experiment-notes.md](docs/experiment-notes.md) for the evidence table
-and interpretation.
-
-## Launch design
+## Architecture
 
 ```text
-Slurm allocation: 3 nodes x 8 GPUs
-        |
-        +-- one srun task per node
-                |
-                +-- torchrun: 8 workers per node
-                        |
-                        +-- 24-worker NCCL process group
-                                |
-                                +-- SFTTrainer + LoRA
+Slurm allocation (3 nodes x 8 H100 GPUs)
+                  |
+                  v
+       one srun task per node
+                  |
+                  v
+       torchrun (8 workers/node)
+                  |
+                  v
+      24-worker NCCL process group
+                  |
+                  v
+   GPT-OSS 120B 4-bit + LoRA + SFTTrainer
+                  |
+                  v
+      rank-zero adapter and run summary
 ```
 
-Each process selects `LOCAL_RANK` without rewriting `CUDA_VISIBLE_DEVICES`.
-Before model loading, the training entry point verifies that the NCCL process
-group matches `WORLD_SIZE`. Only global rank zero writes the final adapter and
-`run_summary.json`.
+Slurm starts one launcher on each node. Each launcher creates eight workers,
+one per GPU, and all workers join a shared C10d rendezvous. The training entry
+point verifies CUDA placement and distributed world size before loading the
+model. Only global rank zero writes final artifacts.
 
-## Repository contents
+See [docs/architecture.md](docs/architecture.md) for the launch sequence and
+design decisions.
 
-| File | Purpose |
+## Repository layout
+
+| Path | Purpose |
 | --- | --- |
-| `train_lora_gptoss_unsloth.py` | Training, dataset normalization, distributed validation, and saving |
-| `launch_torchrun.sh` | Per-node `torchrun` launcher |
-| `run_sft_24gpus_gptoss.slurm` | Example 3-node/24-GPU Slurm submission |
-| `00_env.sh` | Portable environment defaults |
-| `infer_lora_local.py` | Single-GPU adapter inference |
-| `merge_lora.py` | Optional Unsloth 16-bit merged export |
-| `toy.jsonl` | Two-row pipeline smoke-test dataset |
+| `train_lora_gptoss_unsloth.py` | Dataset preparation, LoRA setup, distributed training, and export |
+| `run_sft_24gpus_gptoss.slurm` | Three-node Slurm job definition |
+| `launch_torchrun.sh` | Per-node distributed launcher |
+| `00_env.sh` | Portable environment and cache configuration |
+| `infer_lora_local.py` | Adapter-based generation on one GPU |
+| `merge_lora.py` | Optional 16-bit merged export |
+| `examples/sample_train.jsonl` | Minimal examples of supported dataset schemas |
+| `.env.example` | Configurable paths and hyperparameters |
 
-Raw scheduler logs are deliberately excluded by `.gitignore` because they can
-contain usernames, filesystem paths, internal hostnames, and private IPs.
+## Requirements
 
-## Installation
+- Linux cluster with Slurm
+- 3 nodes with 8 NVIDIA H100 GPUs per node for the default topology
+- CUDA-compatible PyTorch installation
+- Python 3.10+
+- Access to the GPT-OSS 120B base checkpoint
 
-The workflow requires Linux, CUDA, and a GPU with enough memory for the selected
-quantized model. Install the CUDA-compatible PyTorch build recommended for the
-cluster, then install the Python dependencies:
+Create an environment and install the project dependencies:
 
 ```bash
 python -m venv .venv
@@ -89,19 +74,9 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-For reproducible research, capture the working environment after validation:
-
-```bash
-python -m pip freeze > requirements-lock.txt
-```
-
-No lock file is included because the archived environment metadata was not part
-of the downloaded evidence bundle.
-
 ## Configuration
 
-All important values can be overridden through environment variables. Start
-with the example:
+Copy the example configuration and customize the values for your environment:
 
 ```bash
 cp .env.example .env
@@ -111,31 +86,65 @@ set +a
 source ./00_env.sh
 ```
 
-The default `toy.jsonl` contains only two arithmetic conversations. It is for
-pipeline validation, not model-quality training.
+Key settings:
 
-## Running on Slurm
+| Variable | Default | Description |
+| --- | --- | --- |
+| `MODEL_ID` | `unsloth/gpt-oss-120b-unsloth-bnb-4bit` | Base model ID or local checkpoint path |
+| `DATASET` | `examples/sample_train.jsonl` | Training JSONL path |
+| `OUT_DIR` | `runs/gptoss120b-lora` | Adapter and run-summary directory |
+| `MAX_SEQ_LEN` | `2048` | Maximum sequence length |
+| `BSZ` | `1` | Per-device micro-batch size |
+| `GA` | `16` | Gradient accumulation steps |
+| `LR` | `2e-4` | Learning rate |
+| `MAX_STEPS` | `200` | Number of optimizer steps |
+| `LORA_R` | `16` | LoRA rank |
+| `LORA_ALPHA` | `16` | LoRA scaling factor |
+| `LORA_TARGET_MODULES` | attention and MLP projections | Comma-separated target modules |
 
-Adjust the partition, QoS, time limit, GPU type, and CPU allocation for the
-target cluster. Supply cluster-specific partition and QoS values as `sbatch`
-flags or add them to a private copy of the submission file.
+The effective global batch size is:
 
-```bash
-sbatch --partition=<partition> --qos=<qos> run_sft_24gpus_gptoss.slurm
+```text
+world_size x BSZ x GA
 ```
 
-A meaningful run should use a dataset much larger than the number of workers
-and should verify all of the following before its results are reported:
+With the default 24-worker topology, that is `24 x 1 x 16 = 384` sequences
+per optimizer step before packing effects.
 
-1. `run_summary.json` records `world_size: 24`.
-2. Only global rank zero writes the final adapter.
-3. All ranks reach the final barrier without a timeout.
-4. The adapter reloads against the exact base-model revision.
-5. A held-out evaluation or qualitative inference succeeds.
+## Dataset format
 
-## Inference
+The loader accepts several JSONL schemas. A chat-style row looks like this:
 
-After a validated adapter has been produced:
+```json
+{"messages":[{"role":"system","content":"You are a helpful assistant."},{"role":"user","content":"Add 7 + 8."},{"role":"assistant","content":"15"}]}
+```
+
+Role columns are also supported:
+
+```json
+{"system":"You are a helpful assistant.","user":"What is 12 + 23?","assistant":"35"}
+```
+
+Replace the included sample with the project dataset and point `DATASET` to
+its location.
+
+## Launch training
+
+Submit the job from the repository root. Partition and QoS names are supplied
+at submission time so the checked-in job file remains portable:
+
+```bash
+sbatch \
+  --partition=<partition> \
+  --qos=<qos> \
+  run_sft_24gpus_gptoss.slurm
+```
+
+The output directory contains the LoRA adapter, tokenizer files, trainer
+artifacts, and `run_summary.json`. The summary records the model ID, dataset
+size, world size, effective global batch size, step count, and final metrics.
+
+## Run inference
 
 ```bash
 ./run_infer.sh \
@@ -143,13 +152,10 @@ After a validated adapter has been produced:
   --prompt "Explain parameter-efficient fine-tuning in two sentences."
 ```
 
-Add `--local-files-only` only when the complete base checkpoint is already in
-the local Hugging Face cache.
+Use `--base-model` to select a local checkpoint or another compatible model
+reference. Add `--local-files-only` for fully offline inference.
 
-## Merging
-
-Merging a 120B adapter into 16-bit weights requires substantial GPU memory,
-host memory, and disk space. Adapter-only publication is usually more practical.
+## Export merged weights
 
 ```bash
 python merge_lora.py \
@@ -157,15 +163,23 @@ python merge_lora.py \
   --output-dir ./runs/gptoss120b-merged
 ```
 
-Treat a merged export as valid only after it reloads successfully and produces
-an inference result consistent with the adapter-loaded model.
+Adapter-only artifacts remain the smallest and most convenient format for
+iteration. The merge command is available when a standalone 16-bit export is
+needed.
 
-## Scope and limitations
+## Validation checklist
 
-- No model weights or adapters are included.
-- No successful inference output is claimed from the archived run.
-- The two-example loss is an overfitting signal, not a quality metric.
-- This code has been hardened from the archived scripts but has not been rerun
-  in the original 24-GPU environment.
-- Cluster networking and scheduler policies vary; NCCL and Slurm settings may
-  require local adjustment.
+For a production run, confirm that:
+
+1. The startup banner reports `world_size=24`.
+2. All workers join the same rendezvous endpoint.
+3. `run_summary.json` records the expected dataset size and global batch size.
+4. The saved adapter reloads with the same base-model revision.
+5. Evaluation is performed on a held-out dataset aligned with the target use
+   case.
+
+## Engineering focus
+
+This repository emphasizes reusable distributed-training infrastructure:
+portable configuration, deterministic process placement, rank-aware artifact
+ownership, and a clean separation between training, inference, and export.

@@ -1,0 +1,45 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate Python syntax
+        run: |
+          python -m py_compile \
+            train_lora_gptoss_unsloth.py \
+            infer_lora_local.py \
+            merge_lora.py
+
+      - name: Validate shell syntax
+        run: |
+          bash -n 00_env.sh
+          bash -n launch_torchrun.sh
+          bash -n run_infer.sh
+          bash -n run_sft_24gpus_gptoss.slurm
+
+      - name: Validate sample JSONL
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          rows = Path("examples/sample_train.jsonl").read_text().splitlines()
+          assert rows, "sample dataset is empty"
+          for line_number, row in enumerate(rows, start=1):
+              json.loads(row)
+              print(f"validated row {line_number}")
+          PY

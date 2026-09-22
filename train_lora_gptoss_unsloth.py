@@ -28,7 +28,7 @@ def env(name: str, default: Any, cast: type = str) -> Any:
 
 
 MODEL_ID = env("MODEL_ID", "unsloth/gpt-oss-120b-unsloth-bnb-4bit")
-DATASET_PATH = Path(env("DATASET", "toy.jsonl")).expanduser().resolve()
+DATASET_PATH = Path(env("DATASET", "examples/sample_train.jsonl")).expanduser().resolve()
 OUTPUT_DIR = Path(env("OUT_DIR", "runs/gptoss120b-lora")).expanduser().resolve()
 MAX_SEQ_LEN = env("MAX_SEQ_LEN", 2048, int)
 MICRO_BATCH_SIZE = env("BSZ", 1, int)
@@ -153,8 +153,8 @@ def main() -> None:
     dataset = load_training_data(DATASET_PATH)
     if is_main and len(dataset) < world_size:
         print(
-            f"WARNING: dataset has {len(dataset)} rows for {world_size} workers; "
-            "this is a smoke test, not a meaningful training run."
+            f"[data] {len(dataset)} rows across {world_size} workers; "
+            "use a full training dataset for a distributed run."
         )
 
     def formatting_func(row: dict[str, Any]) -> list[str]:

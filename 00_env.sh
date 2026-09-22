@@ -20,7 +20,7 @@ export TORCH_COMPILE_DISABLE="${TORCH_COMPILE_DISABLE:-1}"
 export HF_HOME="${HF_HOME:-${PROJECT_DIR}/.cache/huggingface}"
 export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${PROJECT_DIR}/.cache/triton}"
 export MODEL_ID="${MODEL_ID:-unsloth/gpt-oss-120b-unsloth-bnb-4bit}"
-export DATASET="${DATASET:-${PROJECT_DIR}/toy.jsonl}"
+export DATASET="${DATASET:-${PROJECT_DIR}/examples/sample_train.jsonl}"
 export OUT_DIR="${OUT_DIR:-${PROJECT_DIR}/runs/gptoss120b-lora}"
 export MERGED_OUT="${MERGED_OUT:-${PROJECT_DIR}/runs/gptoss120b-merged}"
 
